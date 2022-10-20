@@ -45,7 +45,8 @@ import json
 import argparse
 from spec2nexus import spec
 from itertools import zip_longest
-
+from mpi4py import MPI
+SCAN_WIN_SIZE = 4
 #=====================================
 #  Import RsMap3D package and setup update progress
 import rsMap3D
@@ -174,6 +175,11 @@ args = parseArgs()
 with open(args.configPath, 'r') as config_f:
     config = json.load(config_f)
 
+
+# MPI Init
+mpiComm = MPI.COMM_WORLD
+mpiRank = mpiComm.Get_rank()
+
 # workpath and config file path
 projectDir = config["project_dir"]
 configDir = config["config_dir"]
@@ -285,8 +291,22 @@ for idx, dataset in enumerate(datasets, 1):
     # (Re)index the SPEC file
     scansInFile_list, spec_data = reindex_specfile(specfile_full)
 
+    # Set up MPI window for shared state
+
+    scanWin = MPI.Win.Allocate(SCAN_WIN_SIZE, comm=mpiComm)
+
+    scanListTopidx = mpiRank
+    if mpiRank == 0:
+        scanWin.Lock(rank=0)
+        scanWin.Put([mpiComm.size.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
+        scanWin.Unlock(rank=0)
+    
+    mpiComm.Barrier()
+
     # Inner loop here, iterate over set of scans, one curve/file per set
-    for idx2, scanList1 in enumerate(scanListTop, 1):
+    while scanListTopidx < len(scanListTop):
+        scanList1 = scanListTop[scanListTopidx]
+        idx2 = scanListTopidx + 1
         # Generate the actual list from the input string list. 
         scanRange = []
         for scans in scanList1:
@@ -436,6 +456,19 @@ for idx, dataset in enumerate(datasets, 1):
             logger.info('  Output filename : %s' % (outputFileName) )
         else:
             logger.info('  Output file disabled. ')
+        
+        scanBuff = bytearray(SCAN_WIN_SIZE)
+        scanWin.Lock(rank=0)
+        scanWin.Get([scanBuff, MPI.BYTE], target_rank=0)
+        scanListTopidx = int.from_bytes(scanBuff, 'little')
+        if scanListTopidx < len(scanListTop):
+            print(f'Proc {mpiRank} Processing {scanListTopidx+1}/{len(scanListTop)}')
+        else:
+            print(f'Proc {mpiRank} finished grid. Beginning merge.')
+
+        scanNext = scanListTopidx + 1
+        scanWin.Put([scanNext.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
+        scanWin.Unlock(rank=0)
             
     with open('time.log', 'a') as time_log:
         endTime = datetime.datetime.now()
