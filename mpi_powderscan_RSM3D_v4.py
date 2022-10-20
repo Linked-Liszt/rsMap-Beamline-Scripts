@@ -464,16 +464,18 @@ for idx, dataset in enumerate(datasets, 1):
         if scanListTopidx < len(scanListTop):
             print(f'Proc {mpiRank} Processing {scanListTopidx+1}/{len(scanListTop)}')
         else:
-            print(f'Proc {mpiRank} finished grid. Beginning merge.')
+            print(f'Proc {mpiRank} finished all available scans.' )
 
         scanNext = scanListTopidx + 1
         scanWin.Put([scanNext.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
         scanWin.Unlock(rank=0)
-            
+
+    mpiComm.Barrier()
+
     with open('time.log', 'a') as time_log:
         endTime = datetime.datetime.now()
         time_log.write(f'End: {endTime}\n')
         time_log.write(f'Diff: {endTime - startTime}\n')
-            
+    
     logger.info('  --------------------------------')
 logger.info('=============================')
